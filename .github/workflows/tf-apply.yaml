@@ -1,0 +1,66 @@
+name: terraform-apply
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: 'Run ID of the successful terraform-plan workflow to apply.'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: prod
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: true
+      GITHUB_OWNER: "demo-user360" 
+      GITHUB_APP_ID: "2042910"                   
+      GITHUB_APP_INSTALLATION_ID: "88210587"
+      GITHUB_APP_PEM_FILE: ${{ secrets.PEM_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine plan run ID
+        id: get_run_id
+        run: |
+          echo "plan_run_id=${{ github.event.inputs.plan_run_id }}" >> $GITHUB_OUTPUT
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: tfplan
+          run-id: ${{ github.event.inputs.plan_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+
+      - name: Terraform Init
+        id: init
+        run: terraform init -backend-config="resource_group_name=${{secrets.BACKEND_AZURE_RESOURCE_GROUP_NAME}}" -backend-config="storage_account_name=${{secrets.BACKEND_AZURE_STORAGE_ACCOUNT_NAME}}" -backend-config="container_name=${{secrets.BACKEND_AZURE_STORAGE_ACCOUNT_CONTAINER_NAME}}"
+
+      - name: Terraform Apply
+        run: |
+          echo "Applying Terraform plan from artifact..."
+          terraform apply -auto-approve -input=false tfplan.binary
